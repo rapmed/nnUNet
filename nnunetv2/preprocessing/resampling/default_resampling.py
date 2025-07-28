@@ -5,9 +5,17 @@ from typing import Union, Tuple, List
 import numpy as np
 import pandas as pd
 import torch
-from batchgenerators.augmentations.utils import resize_segmentation
 from scipy.ndimage import map_coordinates
-from skimage.transform import resize
+
+try:
+    from cucim.skimage.transform import resize as cu_resize
+    import cupy as cp
+
+    def resize(data, shape, order, **kwargs):
+        return cp.asnumpy(cu_resize(cp.asarray(data), shape, order, **kwargs))
+except:
+    from skimage.transform import resize
+
 from nnunetv2.configuration import ANISO_THRESHOLD
 
 
@@ -110,6 +118,32 @@ def resample_data_or_seg_to_shape(data: Union[torch.Tensor, np.ndarray],
     return data_reshaped
 
 
+# Inlined from batchgenerators.augmentations.utils.resize_segmentation
+def resize_segmentation(segmentation, new_shape, order=3):
+    '''
+    Resizes a segmentation map. Supports all orders (see skimage documentation). Will transform segmentation map to one
+    hot encoding which is resized and transformed back to a segmentation map.
+    This prevents interpolation artifacts ([0, 0, 2] -> [0, 1, 2])
+    :param segmentation:
+    :param new_shape:
+    :param order:
+    :return:
+    '''
+    tpe = segmentation.dtype
+    assert len(segmentation.shape) == len(new_shape), "new shape must have same dimensionality as segmentation"
+    if order == 0:
+        return resize(segmentation.astype(float), new_shape, order, mode="edge", clip=True, anti_aliasing=False).astype(tpe)
+    else:
+        reshaped = np.zeros(new_shape, dtype=segmentation.dtype)
+
+        unique_labels = np.sort(pd.unique(segmentation.ravel()))
+        for i, c in enumerate(unique_labels):
+            mask = segmentation == c
+            reshaped_multihot = resize(mask.astype(float), new_shape, order, mode="edge", clip=True, anti_aliasing=False)
+            reshaped[reshaped_multihot >= 0.5] = c
+        return reshaped
+
+
 def resample_data_or_seg(data: np.ndarray, new_shape: Union[Tuple[float, ...], List[float], np.ndarray],
                          is_seg: bool = False, axis: Union[None, int] = None, order: int = 3,
                          do_separate_z: bool = False, order_z: int = 0, dtype_out = None):
@@ -194,7 +228,7 @@ def resample_data_or_seg(data: np.ndarray, new_shape: Union[Tuple[float, ...], L
     else:
         # print("no resampling necessary")
         return data
-    
+
 
 if __name__ == '__main__':
     input_array = np.random.random((1, 42, 231, 142))
